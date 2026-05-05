@@ -1,0 +1,1380 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Dashboard Absensi – Riski Hariyanto</title>
+<link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=DM+Mono:wght@400;500&display=swap" rel="stylesheet">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+<link rel="stylesheet" href="styles.css">
+
+</head>
+<body>
+
+<!-- ══ LOADING SCREEN — ditampilkan selama koneksi Firestore pertama kali ══ -->
+<div id="app-loading" style="display:none; position:fixed; inset:0; background:#fff; align-items:center; justify-content:center; z-index:9999; flex-direction:column; gap:12px; font-family:inherit;">
+  <div style="width:36px;height:36px;border:3px solid #e0e4ed;border-top-color:#1b4fa8;border-radius:50%;animation:spin 0.8s linear infinite;"></div>
+  <div style="font-size:13px;color:#6b7280;">Menghubungkan ke server...</div>
+  <style>@keyframes spin{to{transform:rotate(360deg)}}</style>
+</div>
+
+<!-- ════════════════════════════ LAYAR LOGIN RBAC ════════════════════════════ -->
+<div id="rbac-login-screen">
+  <div class="login-card">
+    <div class="login-logo-row">
+      <div class="login-logo">RH</div>
+      <div class="login-company">
+        <div class="login-company-name">PT. Riski Hariyanto</div>
+        <div class="login-company-sub">Sistem Manajemen SDM &amp; Penggajian</div>
+      </div>
+    </div>
+    <div class="login-title">Masuk ke Dasbor</div>
+    <div class="login-subtitle">Pilih peran untuk melanjutkan ke sistem</div>
+
+    <!-- Fallback global function (akan di-override oleh main.js) -->
+    <script>
+      if (typeof window.onLoginRoleChange === 'undefined') {
+        window.onLoginRoleChange = function() {};
+      }
+    </script>
+
+    <div class="login-field">
+      <label>Peran / Jabatan</label>
+      <select id="login-role" onchange="onLoginRoleChange()">
+        <option value="">— Pilih Peran —</option>
+        <option value="admin">👑 HR Admin — Akses Penuh</option>
+        <option value="supervisor">🔶 Supervisor / Line Leader</option>
+        <option value="karyawan">👤 Karyawan — Lihat Data Pribadi</option>
+      </select>
+    </div>
+
+    <div id="login-extra-field">
+      <!-- Diisi dinamis oleh JS -->
+    </div>
+
+    <div class="login-role-desc" id="login-role-desc"></div>
+
+    <button class="btn-login" id="btn-masuk" disabled onclick="prosesLogin()">
+      Masuk ke Sistem
+    </button>
+    <div class="login-footer">
+      Sistem ini menggunakan simulasi otentikasi berbasis peran (RBAC).<br>
+      Tidak ada kata sandi yang dikirimkan ke server.
+    </div>
+  </div>
+</div>
+
+<!-- ════════════════════════════ HEADER ════════════════════════════ -->
+<header class="app-header">
+  <div class="header-left">
+    <div class="app-brand">Dashboard Absensi · Riski Hariyanto</div>
+    <div class="app-period" id="hdr-period">Periode: 11 April – 25 April 2026</div>
+  </div>
+  <div class="header-actions">
+    <button class="btn-hdr" id="hdr-btn-import" onclick="openImportModal()">⬆ Import Excel/CSV</button>
+    <button class="btn-hdr" id="hdr-btn-import-fp" onclick="openImportFingerprint()" title="Impor dari Mesin Fingerprint/Face Recognition">🖐 Import Fingerprint</button>
+    <button class="btn-hdr" id="hdr-btn-export" onclick="exportExcel()">⬇ Export Excel</button>
+    <button class="btn-hdr danger" id="hdr-btn-hapus" onclick="deleteAllData()" title="Hapus semua data karyawan">🗑 Hapus Semua</button>
+    <button class="btn-hdr" id="hdr-btn-tambah" onclick="openModal()">＋ Tambah Karyawan</button>
+    <!-- Tombol Edit Lock (Mode Proteksi Data) -->
+    <button id="btn-edit-lock" class="terkunci" onclick="toggleEditLock()" title="Klik untuk mengaktifkan atau menonaktifkan mode edit data">
+      🔒 Terkunci
+    </button>
+    <button class="btn-icon" id="hdr-btn-settings" onclick="openSettings()" title="Pengaturan">⚙</button>
+    <!-- Pusat Notifikasi -->
+    <div class="notif-bell-wrap" id="notif-bell-wrap">
+      <button class="btn-bell" id="btn-bell" onclick="toggleNotifPanel()" title="Pusat Notifikasi">
+        🔔
+        <span class="notif-badge" id="notif-badge">0</span>
+      </button>
+    </div>
+    <!-- RBAC: Info pengguna & tombol keluar -->
+    <div class="rbac-user-badge" id="rbac-user-badge" style="display:none;">
+      <div class="rbac-avatar" id="rbac-avatar-icon">?</div>
+      <div>
+        <div id="rbac-display-name" style="line-height:1.2;">—</div>
+        <div class="rbac-role-label" id="rbac-role-label">—</div>
+      </div>
+    </div>
+    <button class="btn-logout" id="btn-logout" style="display:none;" onclick="prosesLogout()">Keluar</button>
+  </div>
+</header>
+
+<!-- ════════════════════════════ BODY ════════════════════════════ -->
+<div class="app-body">
+
+  <!-- Banner Premi Global (muncul otomatis jika relevan) -->
+  <div class="premi-banner" id="premi-banner">
+    <div class="premi-banner-ico">💰</div>
+    <div class="premi-banner-text">
+      <strong id="premi-banner-tgl">Premi akan dicairkan tanggal 5 bulan depan</strong>
+      <small id="premi-banner-sub">Pastikan data absensi periode ini sudah dikunci sebelum tanggal tersebut.</small>
+    </div>
+    <button class="btn-premi-dismiss" onclick="tutupPremiBanner()">✕ Tutup</button>
+  </div>
+
+  <!-- TABS -->
+  <div class="tabs-bar">
+    <div class="tab active" onclick="switchTab('absensi',this)">Rekapitulasi Absensi</div>
+    <div class="tab" onclick="switchTab('payroll',this)">Payroll &amp; Premi</div>
+    <div class="tab" onclick="switchTab('analitik',this)">📊 Dashboard Analitik Lanjutan</div>
+    <div class="tab" onclick="switchTab('cuti',this)">🌿 Manajemen Cuti</div>
+  </div>
+
+  <!-- ══ TAB: ABSENSI ══ -->
+  <div id="tab-absensi" class="panel active">
+    <div class="summary-row">
+      <div class="card-sum c-blue">
+        <div class="cs-lbl">Total Karyawan</div>
+        <div class="cs-val" id="sc-total">25</div>
+        <div class="cs-sub">Aktif periode ini</div>
+      </div>
+      <div class="card-sum c-green">
+        <div class="cs-lbl">Rata-rata Hadir</div>
+        <div class="cs-val" id="sc-hadir">—</div>
+        <div class="cs-sub">Hari / orang</div>
+      </div>
+      <div class="card-sum c-red">
+        <div class="cs-lbl">Ada Alfa</div>
+        <div class="cs-val" id="sc-alfa">—</div>
+        <div class="cs-sub">Karyawan bermasalah</div>
+      </div>
+      <div class="card-sum c-amber">
+        <div class="cs-lbl">Tidak Masuk Hari Ini</div>
+        <div class="cs-val" id="sc-absent">—</div>
+        <div class="cs-sub">Per hari terakhir data</div>
+      </div>
+      <div class="card-sum c-gray">
+        <div class="cs-lbl">Dapat Premi Hadir</div>
+        <div class="cs-val" id="sc-premi">—</div>
+        <div class="cs-sub">Dari total karyawan</div>
+      </div>
+    </div>
+
+    <div class="toolbar">
+      <input type="text" id="search-emp" placeholder="🔍 Cari nama / NIK…" oninput="renderTable()">
+      <select id="filter-div" onchange="renderTable()">
+        <option value="">Semua Divisi</option>
+        <option value="WS">WS</option>
+        <option value="S. TEMPEL">S. Tempel</option>
+        <option value="S. JARUM 2">S. Jarum 2</option>
+        <option value="S. JARUM 1,2">S. Jarum 1,2</option>
+      </select>
+      <select id="filter-status" onchange="renderTable()">
+        <option value="">Semua Status</option>
+        <option value="alfa">Ada Alfa</option>
+        <option value="premi">Dapat Premi</option>
+        <option value="no-premi">Tidak Premi</option>
+      </select>
+      <button class="btn toggle-off" id="btn-sorot" onclick="toggleSorot()">🔴 Sorot Masalah Hari Ini</button>
+      <button class="btn btn-bulk-edit" onclick="openBulkEditModal()">📋 Bulk Edit Hari</button>
+      <button class="btn" id="btn-toggle-daily" onclick="toggleDailyAttendance()" style="font-size:11.5px;">
+        📅 Sembunyikan 30 Hari
+      </button>
+
+      <!-- ── Tombol Visibilitas Kolom (Tabel Absensi) ── -->
+      <div class="col-vis-wrap" id="col-vis-wrap-absensi">
+        <button class="btn btn-col-vis" id="btn-col-vis-absensi"
+          onclick="toggleColVisPanel('absensi')"
+          title="Pilih kolom yang ditampilkan di tabel absensi">
+          👁 Tampilkan Kolom
+        </button>
+        <div class="col-vis-panel" id="col-vis-panel-absensi">
+          <div class="col-vis-title">Pilih Kolom yang Ditampilkan</div>
+          <label class="col-vis-item">
+            <input type="checkbox" id="cv-rek" onchange="setColVis('rek', this.checked)">
+            Nomor Rekening Bank
+          </label>
+          <label class="col-vis-item">
+            <input type="checkbox" id="cv-tgl" onchange="setColVis('tgl', this.checked)">
+            Tanggal Masuk
+          </label>
+          <label class="col-vis-item">
+            <input type="checkbox" id="cv-div" onchange="setColVis('div', this.checked)">
+            Divisi
+          </label>
+          <label class="col-vis-item">
+            <input type="checkbox" id="cv-kalkulasi" onchange="setColVis('kalkulasi', this.checked)">
+            Kolom Kalkulasi Gaji
+          </label>
+        </div>
+      </div>
+    </div>
+
+    <!-- ── PETUNJUK KODE ABSENSI ── -->
+    <div class="alert info" style="margin-bottom:8px;padding:8px 14px;font-size:11.5px;">
+      <span class="ico">ℹ</span>
+      <span>
+        <strong>Petunjuk Kode Absensi:</strong> &nbsp;
+        <span style="display:inline-flex;align-items:center;gap:4px;margin-right:8px;"><span style="background:#e8f5e9;border:1px solid #66bb6a;border-radius:3px;padding:1px 5px;font-weight:700;font-size:11px;">√</span> Hadir Penuh (tanpa lembur)</span>
+        <span style="display:inline-flex;align-items:center;gap:4px;margin-right:8px;"><span style="background:#e3f2fd;border:1px solid #1b4fa8;border-radius:3px;padding:1px 5px;font-weight:700;font-size:11px;color:#1b4fa8;">1, 2, 3…</span> Hadir Penuh + jam lembur (OT) sebesar angka tersebut</span>
+        <span style="display:inline-flex;align-items:center;gap:4px;margin-right:8px;"><span style="background:var(--red-light);border:1px solid var(--red);border-radius:3px;padding:1px 5px;font-weight:700;font-size:11px;color:var(--red);">A</span> Alfa</span>
+        <span style="display:inline-flex;align-items:center;gap:4px;margin-right:8px;"><span style="background:#fff8e1;border:1px solid var(--amber);border-radius:3px;padding:1px 5px;font-weight:700;font-size:11px;color:var(--amber);">I</span> Izin</span>
+        <span style="display:inline-flex;align-items:center;gap:4px;margin-right:8px;"><span style="background:var(--accent-light);border:1px solid var(--accent);border-radius:3px;padding:1px 5px;font-weight:700;font-size:11px;color:var(--accent);">S</span> Sakit</span>
+        <span style="display:inline-flex;align-items:center;gap:4px;margin-right:8px;"><span style="background:#ede9fe;border:1px solid #7c3aed;border-radius:3px;padding:1px 5px;font-weight:700;font-size:11px;color:#7c3aed;">C</span> Cuti Tahunan</span>
+        <span style="display:inline-flex;align-items:center;gap:4px;"><span style="background:#f5f5f5;border:1px solid #9e9e9e;border-radius:3px;padding:1px 5px;font-weight:700;font-size:11px;color:#555;">L</span> Libur</span>
+      </span>
+    </div>
+
+    <div class="tbl-wrap">
+      <!-- Banner peringatan mode terkunci (tampil otomatis saat terkunci) -->
+      <div class="lock-banner" id="lock-banner">
+        🔒 <strong>Mode Terkunci Aktif</strong> — Klik nama karyawan tidak akan membuka panel edit. Aktifkan 🔓 Mode Edit di header untuk mengelola data.
+      </div>
+      <table id="main-table">
+        <thead>
+          <!-- ROW 1: Group headers -->
+          <tr class="row-group">
+            <th colspan="6" style="text-align:left;padding-left:10px;background:#0a1830;">Identitas Karyawan</th>
+            <th colspan="15">Absensi Periode 11 April – 25 April 2026</th>
+            <th colspan="6">Rekapitulasi Kehadiran</th>
+            <!-- BUG 1 FIX: colspan updated for new Gaji Pokok Harian column -->
+            <th colspan="5">Kalkulasi Tunjangan</th>
+            <th colspan="7">Absensi untuk Hitung Premi</th>
+          </tr>
+          <!-- ROW 2: Column headers – BUG 1 FIX: NO abbreviations, proper wrapping -->
+          <tr class="row-col">
+            <th class="left" style="min-width:28px;max-width:36px;">No.</th>
+            <th class="left" style="min-width:130px;">Nama<br>姓名</th>
+            <th style="min-width:72px;">NIK</th>
+            <th style="min-width:90px;">Nomor<br>Rekening<br>Bank</th>
+            <th style="min-width:80px;">Tanggal<br>Masuk</th>
+            <th style="min-width:80px;">Divisi</th>
+            <!-- Days 11-25 -->
+            <th class="th-day" style="min-width:32px;max-width:36px;"><span class="day-hdr-wrap" data-day="11">11<span class="day-note-btn" onclick="openCatatanHari(11,event)" title="Catatan Hari Ini">📝</span></span></th>
+            <th class="th-day th-day-sun" style="min-width:32px;max-width:36px;"><span class="day-hdr-wrap" data-day="12">12<span class="day-note-btn" onclick="openCatatanHari(12,event)" title="Catatan Hari Ini">📝</span></span></th>
+            <th class="th-day" style="min-width:32px;max-width:36px;"><span class="day-hdr-wrap" data-day="13">13<span class="day-note-btn" onclick="openCatatanHari(13,event)" title="Catatan Hari Ini">📝</span></span></th>
+            <th class="th-day" style="min-width:32px;max-width:36px;"><span class="day-hdr-wrap" data-day="14">14<span class="day-note-btn" onclick="openCatatanHari(14,event)" title="Catatan Hari Ini">📝</span></span></th>
+            <th class="th-day" style="min-width:32px;max-width:36px;"><span class="day-hdr-wrap" data-day="15">15<span class="day-note-btn" onclick="openCatatanHari(15,event)" title="Catatan Hari Ini">📝</span></span></th>
+            <th class="th-day" style="min-width:32px;max-width:36px;"><span class="day-hdr-wrap" data-day="16">16<span class="day-note-btn" onclick="openCatatanHari(16,event)" title="Catatan Hari Ini">📝</span></span></th>
+            <th class="th-day" style="min-width:32px;max-width:36px;"><span class="day-hdr-wrap" data-day="17">17<span class="day-note-btn" onclick="openCatatanHari(17,event)" title="Catatan Hari Ini">📝</span></span></th>
+            <th class="th-day" style="min-width:32px;max-width:36px;"><span class="day-hdr-wrap" data-day="18">18<span class="day-note-btn" onclick="openCatatanHari(18,event)" title="Catatan Hari Ini">📝</span></span></th>
+            <th class="th-day th-day-sun" style="min-width:32px;max-width:36px;"><span class="day-hdr-wrap" data-day="19">19<span class="day-note-btn" onclick="openCatatanHari(19,event)" title="Catatan Hari Ini">📝</span></span></th>
+            <th class="th-day" style="min-width:32px;max-width:36px;"><span class="day-hdr-wrap" data-day="20">20<span class="day-note-btn" onclick="openCatatanHari(20,event)" title="Catatan Hari Ini">📝</span></span></th>
+            <th class="th-day" style="min-width:32px;max-width:36px;"><span class="day-hdr-wrap" data-day="21">21<span class="day-note-btn" onclick="openCatatanHari(21,event)" title="Catatan Hari Ini">📝</span></span></th>
+            <th class="th-day" style="min-width:32px;max-width:36px;"><span class="day-hdr-wrap" data-day="22">22<span class="day-note-btn" onclick="openCatatanHari(22,event)" title="Catatan Hari Ini">📝</span></span></th>
+            <th class="th-day" style="min-width:32px;max-width:36px;"><span class="day-hdr-wrap" data-day="23">23<span class="day-note-btn" onclick="openCatatanHari(23,event)" title="Catatan Hari Ini">📝</span></span></th>
+            <th class="th-day" style="min-width:32px;max-width:36px;"><span class="day-hdr-wrap" data-day="24">24<span class="day-note-btn" onclick="openCatatanHari(24,event)" title="Catatan Hari Ini">📝</span></span></th>
+            <th class="th-day" style="min-width:32px;max-width:36px;"><span class="day-hdr-wrap" data-day="25">25<span class="day-note-btn" onclick="openCatatanHari(25,event)" title="Catatan Hari Ini">📝</span></span></th>
+            <!-- Summary – BUG 1 FIX: Full labels, no abbreviations -->
+            <th class="th-sum" style="min-width:48px;max-width:60px;">Total<br>Hari</th>
+            <th class="th-sum" style="min-width:40px;max-width:50px;">Alfa</th>
+            <th class="th-sum" style="min-width:40px;max-width:50px;">Izin</th>
+            <th class="th-sum" style="min-width:40px;max-width:50px;">Sakit</th>
+            <th class="th-sum" style="min-width:40px;max-width:50px;background:#2d1b5e;color:#c4b5fd;">Cuti</th>
+            <th class="th-sum" style="min-width:40px;max-width:50px;">Libur</th>
+            <!-- Pay – BUG 1 FIX: Full labels, correct min/max width -->
+            <th class="th-pay" style="min-width:80px;max-width:100px;">Total<br>Tidak<br>Masuk</th>
+            <th class="th-pay" style="min-width:80px;max-width:100px;">Total<br>Kehadiran</th>
+            <th class="th-pay" style="min-width:80px;max-width:100px;">Uang<br>Transport</th>
+            <th class="th-pay" style="min-width:80px;max-width:100px;">Uang<br>Makan</th>
+            <th class="th-pay" style="min-width:80px;max-width:100px;">Total<br>Lembur</th>
+            <th class="th-pay" style="min-width:80px;max-width:100px;">Potongan<br>Jam</th>
+            <th class="th-pay" style="min-width:80px;max-width:100px;">Potongan<br>BPJS</th>
+            <!-- Premi cols – BUG 1 FIX: Full labels -->
+            <th class="th-premi" style="min-width:40px;max-width:50px;">Alfa</th>
+            <th class="th-premi" style="min-width:40px;max-width:50px;">Izin</th>
+            <th class="th-premi" style="min-width:40px;max-width:50px;">Sakit</th>
+            <th class="th-premi" style="min-width:40px;max-width:50px;background:#1e1040;color:#c4b5fd;">Cuti</th>
+            <th class="th-premi" style="min-width:40px;max-width:50px;">Libur</th>
+            <th class="th-premi" style="min-width:80px;max-width:100px;">Total<br>Tidak<br>Masuk</th>
+            <th class="th-premi" style="min-width:80px;max-width:100px;">Total<br>Kehadiran</th>
+          </tr>
+        </thead>
+        <tbody id="tbl-body"></tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- ══ TAB: PAYROLL ══ -->
+  <div id="tab-payroll" class="panel">
+    <!-- Period Bar -->
+    <div class="period-bar">
+      <label>📅 Periode Payroll:</label>
+      <select id="payroll-period-select" onchange="switchPayrollPeriod()">
+        <option value="__live__">— Periode Aktif —</option>
+      </select>
+      <span id="payroll-period-badge" class="badge-live">AKTIF</span>
+      <div style="margin-left:auto;display:flex;gap:8px;flex-wrap:wrap;">
+        <button class="btn" onclick="openTHRModal()" title="Hitung THR">🎁 Hitung THR</button>
+        <button class="btn" onclick="openPPh21Modal()" title="Laporan Tahunan PPh 21">📋 Laporan PPh 21</button>
+        <button class="btn primary" onclick="konfirmasiSimpanPeriode()" title="Kunci periode ini ke arsip histori">🔒 Simpan Periode</button>
+      </div>
+    </div>
+    <div class="alert info" id="payroll-info-banner">
+      <span class="ico">ℹ</span>
+      <span>Kalkulasi payroll dihitung otomatis dari data absensi. Premi hadir dibayarkan setiap tanggal 5 bulan berikutnya. Nilai gaji pokok, transport, makan, dan premi dapat diatur di ⚙ Pengaturan.</span>
+    </div>
+    <div class="toolbar" style="justify-content:space-between;flex-wrap:wrap;">
+      <div style="display:flex;align-items:center;gap:8px;flex:1;min-width:220px;">
+        <input type="text" id="search-payroll" placeholder="🔍 Cari nama / NIK karyawan…" oninput="filterPayroll()" style="flex:1;max-width:300px;">
+        <select id="filter-payroll-status" onchange="filterPayroll()">
+          <option value="">Semua Status</option>
+          <option value="premi">✓ Dapat Premi</option>
+          <option value="no-premi">✗ Tidak Premi</option>
+        </select>
+      </div>
+      <!-- ── Tombol Visibilitas Kolom (Kartu Payroll) ── -->
+      <div class="col-vis-wrap" id="col-vis-wrap-payroll">
+        <button class="btn btn-col-vis" id="btn-col-vis-payroll"
+          onclick="toggleColVisPanel('payroll')"
+          title="Pilih baris yang ditampilkan di kartu payroll">
+          👁 Tampilkan Kolom
+        </button>
+        <div class="col-vis-panel" id="col-vis-panel-payroll">
+          <div class="col-vis-title">Pilih Baris yang Ditampilkan</div>
+          <label class="col-vis-item">
+            <input type="checkbox" id="cv-p-transport" onchange="setColVis('p_transport', this.checked)">
+            Uang Transport
+          </label>
+          <label class="col-vis-item">
+            <input type="checkbox" id="cv-p-makan" onchange="setColVis('p_makan', this.checked)">
+            Uang Makan
+          </label>
+          <label class="col-vis-item">
+            <input type="checkbox" id="cv-p-lembur" onchange="setColVis('p_lembur', this.checked)">
+            Total Lembur
+          </label>
+          <label class="col-vis-item">
+            <input type="checkbox" id="cv-p-potongan" onchange="setColVis('p_potongan', this.checked)">
+            Potongan Jam
+          </label>
+          <label class="col-vis-item">
+            <input type="checkbox" id="cv-p-bpjs" onchange="setColVis('p_bpjs', this.checked)">
+            Potongan BPJS
+          </label>
+        </div>
+      </div>
+      <button class="btn primary" onclick="openSlipAll()">🖨 Cetak Slip Gaji Semua</button>
+    </div>
+    <div id="payroll-empty" style="display:none;text-align:center;padding:40px 20px;color:var(--text3);">
+      <div style="font-size:32px;margin-bottom:8px;">🔍</div>
+      <div style="font-size:13px;font-weight:500;">Tidak ada karyawan yang cocok</div>
+      <div style="font-size:11.5px;margin-top:4px;">Coba ubah kata kunci pencarian</div>
+    </div>
+    <div class="payroll-grid" id="payroll-list"></div>
+  </div>
+
+  <!-- ══ TAB: ANALITIK ══ -->
+  <div id="tab-analitik" class="panel">
+
+    <!-- Judul Halaman -->
+    <div class="an-page-title">
+      <div class="an-page-icon">📊</div>
+      <div>
+        <div class="an-page-heading">Dashboard Analitik Lanjutan</div>
+        <div class="an-page-sub">Data periode: <span id="an-period-label">—</span> · Diperbarui otomatis</div>
+      </div>
+      <button class="an-refresh-btn" onclick="renderAnalitik()">↻ Perbarui Data</button>
+    </div>
+
+    <!-- KPI Cards Row -->
+    <div class="an-kpi-row">
+      <div class="an-kpi kpi-blue">
+        <div class="an-kpi-lbl">Tingkat Kehadiran</div>
+        <div class="an-kpi-val" id="an-rate">—</div>
+        <div class="an-kpi-sub">% dari hari kerja efektif</div>
+      </div>
+      <div class="an-kpi kpi-red">
+        <div class="an-kpi-lbl">Biaya Ketidakhadiran</div>
+        <div class="an-kpi-val danger" id="an-coa-kpi">—</div>
+        <div class="an-kpi-sub">Estimasi kerugian Alfa</div>
+      </div>
+      <div class="an-kpi kpi-amber">
+        <div class="an-kpi-lbl">Tingkat Pergantian Karyawan</div>
+        <div class="an-kpi-val" id="an-turnover">—</div>
+        <div class="an-kpi-sub">% dari total karyawan (resign)</div>
+      </div>
+      <div class="an-kpi kpi-green">
+        <div class="an-kpi-lbl">Rata-rata Masa Kerja</div>
+        <div class="an-kpi-val" id="an-tenure-avg">—</div>
+        <div class="an-kpi-sub">Seluruh karyawan aktif</div>
+      </div>
+      <div class="an-kpi kpi-purple">
+        <div class="an-kpi-lbl">Total Alfa Periode Ini</div>
+        <div class="an-kpi-val danger" id="an-total-alfa">—</div>
+        <div class="an-kpi-sub">Hari tanpa keterangan</div>
+      </div>
+    </div>
+
+    <!-- Baris 1: Divisi + Cost of Absenteeism -->
+    <div class="an-grid" style="margin-bottom:14px;">
+
+      <!-- Analitik Divisi -->
+      <div class="an-card">
+        <div class="an-card-hdr">
+          <div class="an-card-hdr-left">
+            <span class="an-card-icon">🏭</span>
+            <div>
+              <div class="an-card-title">Tingkat Absen per Divisi</div>
+              <div class="an-card-sub">Komparasi kehadiran antar divisi</div>
+            </div>
+          </div>
+        </div>
+        <div class="an-card-body">
+          <div class="div-chart-wrap" id="chart-divisi">
+            <div style="color:var(--text3);text-align:center;padding:24px;font-size:12px;">Memuat data…</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Cost of Absenteeism -->
+      <div class="an-card">
+        <div class="an-card-hdr">
+          <div class="an-card-hdr-left">
+            <span class="an-card-icon">💸</span>
+            <div>
+              <div class="an-card-title">Biaya Ketidakhadiran (Cost of Absenteeism)</div>
+              <div class="an-card-sub">Estimasi kerugian finansial akibat absensi</div>
+            </div>
+          </div>
+        </div>
+        <div class="an-card-body" id="chart-coa">
+          <div style="color:var(--text3);text-align:center;padding:24px;font-size:12px;">Memuat data…</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Baris 2: Retensi + Heatmap -->
+    <div class="an-grid" style="margin-bottom:14px;">
+
+      <!-- Metrik Retensi -->
+      <div class="an-card">
+        <div class="an-card-hdr">
+          <div class="an-card-hdr-left">
+            <span class="an-card-icon">👥</span>
+            <div>
+              <div class="an-card-title">Metrik Retensi Karyawan</div>
+              <div class="an-card-sub">Turnover Rate &amp; analisis masa kerja (Tenure)</div>
+            </div>
+          </div>
+        </div>
+        <div class="an-card-body" id="chart-retensi">
+          <div style="color:var(--text3);text-align:center;padding:24px;font-size:12px;">Memuat data…</div>
+        </div>
+      </div>
+
+      <!-- Heatmap Absensi (dihapus sesuai permintaan) -->
+      <!-- <div class="an-card" style="display:none;"> ... </div> -->
+
+      <!-- Riwayat Resign / Pensiun (placeholder) -->
+      <div class="an-card" id="resign-history-card">
+        <div class="an-card-hdr">
+          <div class="an-card-hdr-left">
+            <span class="an-card-icon">📋</span>
+            <div>
+              <div class="an-card-title">Riwayat Resign / Pensiun</div>
+              <div class="an-card-sub" id="resign-sub">Memuat data…</div>
+            </div>
+          </div>
+        </div>
+        <div class="an-card-body" id="chart-resign" style="padding:0; max-height:320px; overflow-y:auto;">
+          <div style="color:var(--text3);text-align:center;padding:24px;font-size:12px;">Memuat data…</div>
+        </div>
+      </div>
+    </div>
+
+  </div>
+
+  <!-- ══ TAB: MANAJEMEN CUTI ══ -->
+  <div id="tab-cuti" class="panel">
+
+    <!-- Ringkasan saldo seluruh karyawan -->
+    <div class="summary-row" id="cuti-summary-cards">
+      <div class="card-sum c-blue">
+        <div class="cs-lbl">Total Pengajuan</div>
+        <div class="cs-val" id="cs-total-pengajuan">—</div>
+        <div class="cs-sub">Semua periode</div>
+      </div>
+      <div class="card-sum c-amber">
+        <div class="cs-lbl">Menunggu Persetujuan</div>
+        <div class="cs-val" id="cs-menunggu">—</div>
+        <div class="cs-sub">Perlu ditindaklanjuti</div>
+      </div>
+      <div class="card-sum c-green">
+        <div class="cs-lbl">Disetujui</div>
+        <div class="cs-val" id="cs-disetujui">—</div>
+        <div class="cs-sub">Periode berjalan</div>
+      </div>
+      <div class="card-sum c-red">
+        <div class="cs-lbl">Saldo Habis</div>
+        <div class="cs-val" id="cs-saldo-habis">—</div>
+        <div class="cs-sub">Karyawan tanpa sisa cuti</div>
+      </div>
+    </div>
+
+    <div class="cuti-layout">
+      <!-- Kolom kiri: daftar pengajuan -->
+      <div>
+        <!-- Filter -->
+        <div class="cuti-filterbar">
+          <input type="text" id="cuti-search" placeholder="🔍 Cari nama / NIK…" oninput="renderCuti()" style="width:200px;">
+          <select id="cuti-filter-status" onchange="renderCuti()">
+            <option value="">Semua Status</option>
+            <option value="menunggu">Menunggu</option>
+            <option value="disetujui">Disetujui</option>
+            <option value="ditolak">Ditolak</option>
+            <option value="dibatalkan">Dibatalkan</option>
+          </select>
+          <select id="cuti-filter-tipe" onchange="renderCuti()">
+            <option value="">Semua Jenis</option>
+            <option value="tahunan">Cuti Tahunan</option>
+            <option value="menikah">Cuti Menikah</option>
+            <option value="melahirkan">Cuti Melahirkan</option>
+            <option value="haji">Cuti Ibadah Haji</option>
+            <option value="umroh">Cuti Ibadah Umroh</option>
+            <option value="sakit-panjang">Sakit Panjang</option>
+            <option value="khusus">Cuti Khusus</option>
+          </select>
+          <button class="btn" onclick="exportCutiExcel()">⬇ Export Excel</button>
+        </div>
+
+        <!-- Tabel pengajuan -->
+        <div class="pengajuan-card">
+          <div class="pengajuan-card-hdr">
+            <h3>📋 Riwayat & Status Pengajuan</h3>
+            <span style="font-size:11px;color:var(--text3);" id="cuti-count-label">— pengajuan</span>
+          </div>
+          <div class="tbl-cuti-wrap">
+            <table class="tbl-cuti">
+              <thead>
+                <tr>
+                  <th style="min-width:130px;">Nama Karyawan</th>
+                  <th style="min-width:80px;">NIK</th>
+                  <th style="min-width:110px;">Jenis Cuti</th>
+                  <th style="min-width:90px;">Tgl Mulai</th>
+                  <th style="min-width:90px;">Tgl Selesai</th>
+                  <th style="min-width:50px;text-align:center;">Hari</th>
+                  <th style="min-width:120px;">Alasan</th>
+                  <th style="min-width:100px;">Status</th>
+                  <th style="min-width:130px;">Tindakan</th>
+                </tr>
+              </thead>
+              <tbody id="tbl-cuti-body">
+                <tr><td colspan="9" style="text-align:center;padding:32px;color:var(--text3);">Belum ada pengajuan cuti.</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+        <!-- Saldo per karyawan -->
+        <div class="pengajuan-card" style="margin-top:14px;">
+          <div class="pengajuan-card-hdr">
+            <h3>📊 Saldo Cuti per Karyawan</h3>
+            <select id="cuti-saldo-year" onchange="renderSaldoTable()" style="font-size:12px;padding:4px 8px;border:1px solid var(--border2);border-radius:var(--r);background:var(--surface);font-family:inherit;">
+              <option value="2026">2026</option>
+              <option value="2025">2025</option>
+            </select>
+          </div>
+          <div class="tbl-cuti-wrap">
+            <table class="tbl-cuti">
+              <thead>
+                <tr>
+                  <th style="min-width:140px;">Nama</th>
+                  <th style="min-width:70px;">Divisi</th>
+                  <th style="text-align:center;min-width:70px;">Hak Cuti</th>
+                  <th style="text-align:center;min-width:70px;">Terpakai</th>
+                  <th style="text-align:center;min-width:70px;">Sisa</th>
+                  <th style="text-align:center;min-width:70px;">Cuti Menikah</th>
+                  <th style="text-align:center;min-width:80px;">Cuti Melahirkan</th>
+                  <th style="text-align:center;min-width:70px;">Ibadah Haji</th>
+                  <th style="text-align:center;min-width:70px;">Ibadah Umroh</th>
+                  <th style="min-width:130px;">Progress</th>
+                </tr>
+              </thead>
+              <tbody id="tbl-saldo-body"></tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+
+      <!-- Kolom kanan: form pengajuan -->
+      <div class="form-cuti">
+        <h3>➕ Ajukan Cuti Baru</h3>
+        <div class="form-group" style="margin-bottom:10px;">
+          <label>Karyawan <span style="color:var(--red)">*</span></label>
+          <input type="text" id="fc-karyawan" list="fc-karyawan-list" placeholder="Ketik nama atau NIK karyawan..." oninput="updateSaldoPreview()" style="width:100%;padding:8px 10px;border:1px solid var(--border2);border-radius:var(--r);font-family:inherit;font-size:13px;outline:none;">
+          <datalist id="fc-karyawan-list"></datalist>
+        </div>
+        <!-- Pratinjau saldo karyawan terpilih -->
+        <div id="fc-saldo-preview" style="display:none;margin-bottom:10px;padding:10px 12px;background:var(--surface2);border:1px solid var(--border);border-radius:var(--r);">
+          <div style="font-size:10px;font-weight:700;color:var(--text3);text-transform:uppercase;letter-spacing:.4px;margin-bottom:6px;">Saldo Cuti Saat Ini</div>
+          <div id="fc-saldo-detail" style="font-size:11.5px;line-height:1.8;"></div>
+        </div>
+        <div class="form-group" style="margin-bottom:10px;">
+          <label>Jenis Cuti <span style="color:var(--red)">*</span></label>
+          <select id="fc-tipe" onchange="updateKuotaInfo()">
+            <option value="">— Pilih Jenis —</option>
+            <option value="tahunan">Cuti Tahunan (12 hari/tahun)</option>
+            <option value="menikah">Cuti Menikah (3 hari)</option>
+            <option value="melahirkan">Cuti Melahirkan (90 hari)</option>
+            <option value="haji">Cuti Ibadah Haji (40 hari)</option>
+            <option value="umroh">Cuti Ibadah Umroh (sesuai paket)</option>
+            <option value="sakit-panjang">Sakit Panjang — butuh surat dokter</option>
+            <option value="khusus">Cuti Khusus / Darurat</option>
+          </select>
+        </div>
+        <div id="fc-kuota-info" style="display:none;margin-bottom:10px;padding:8px 12px;border-radius:var(--r);font-size:11.5px;"></div>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:10px;">
+          <div class="form-group">
+            <label>Tanggal Mulai <span style="color:var(--red)">*</span></label>
+            <input type="date" id="fc-tgl-mulai" onchange="hitungDurasiCuti()">
+          </div>
+          <div class="form-group">
+            <label>Tanggal Selesai <span style="color:var(--red)">*</span></label>
+            <input type="date" id="fc-tgl-selesai" onchange="hitungDurasiCuti()">
+          </div>
+        </div>
+        <div class="cuti-durasi-preview" id="fc-durasi-preview"></div>
+        <div class="form-group" style="margin-bottom:10px;">
+          <label>Alasan / Keterangan</label>
+          <input type="text" id="fc-alasan" placeholder="Misal: liburan keluarga, keperluan mendesak, dll." style="width:100%;padding:8px 10px;border:1px solid var(--border2);border-radius:var(--r);font-family:inherit;font-size:12.5px;outline:none;">
+        </div>
+        <div class="form-group" style="margin-bottom:14px;">
+          <label>Catatan Manajemen (opsional)</label>
+          <input type="text" id="fc-catatan" placeholder="Catatan internal untuk keperluan arsip HR" style="width:100%;padding:8px 10px;border:1px solid var(--border2);border-radius:var(--r);font-family:inherit;font-size:12.5px;outline:none;">
+        </div>
+        <div style="display:flex;gap:8px;">
+          <button class="btn primary" style="flex:1;" onclick="simpanPengajuanCuti()">✓ Simpan Pengajuan</button>
+          <button class="btn" onclick="resetFormCuti()">↺ Reset</button>
+        </div>
+        <div style="margin-top:14px;padding-top:12px;border-top:1px solid var(--border);">
+          <div style="font-size:10.5px;font-weight:700;color:var(--text3);letter-spacing:.4px;text-transform:uppercase;margin-bottom:8px;">Kuota Jenis Cuti</div>
+          <div style="font-size:11px;color:var(--text2);line-height:2;">
+            🟣 Cuti Tahunan &nbsp;—&nbsp; <b>12 hari</b> / tahun<br>
+            💜 Cuti Menikah &nbsp;—&nbsp; <b>3 hari</b> sekali seumur hidup<br>
+            ❤ Cuti Melahirkan &nbsp;—&nbsp; <b>90 hari</b> per persalinan<br>
+            🟠 Cuti Ibadah Haji &nbsp;—&nbsp; <b>40 hari</b> sekali seumur hidup<br>
+            🟤 Cuti Ibadah Umroh &nbsp;—&nbsp; <b>Sesuai paket ibadah</b> (regulasi berlaku)<br>
+            🔵 Sakit Panjang &nbsp;—&nbsp; Sesuai surat keterangan dokter<br>
+            ⚪ Cuti Khusus/Darurat &nbsp;—&nbsp; Kebijaksanaan Manajemen<br>
+            <span style="font-size:9.5px;color:var(--text3);">* Cuti Khusus tidak memotong saldo Cuti Tahunan</span>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+
+</div><!-- /app-body -->
+
+<!-- ════════════════════════════ DETAIL OVERLAY ════════════════════════════ -->
+<div class="detail-overlay" id="detail-overlay" onclick="closeDetail()"></div>
+
+<!-- ════════════════════════════ DETAIL PANEL ════════════════════════════ -->
+<div class="detail-panel" id="detail-panel">
+  <div class="detail-hdr">
+    <div class="d-avatar" id="dp-avatar">??</div>
+    <div style="flex:1">
+      <div style="font-weight:600;font-size:13.5px;" id="dp-name">—</div>
+      <div style="font-size:11px;color:var(--text3);" id="dp-info">—</div>
+    </div>
+    <button class="btn-close" onclick="closeDetail()">✕</button>
+  </div>
+  <div class="detail-body">
+    <div class="dmet-grid" id="dp-metrics"></div>
+
+    <!-- Master data karyawan -->
+    <div id="dp-master-data"></div>
+
+    <!-- Saldo & riwayat cuti karyawan -->
+    <div id="dp-cuti-saldo"></div>
+
+    <div style="font-size:10.5px;font-weight:700;color:var(--text3);letter-spacing:.5px;margin-bottom:6px;">KALENDER ABSENSI</div>
+    <div class="mini-cal" id="dp-cal"></div>
+    <!-- YTD Ringkasan -->
+    <div id="dp-ytd"></div>
+    <div style="font-size:10.5px;font-weight:700;color:var(--text3);letter-spacing:.5px;margin:12px 0 6px;">PAYROLL RINGKAS</div>
+    <div id="dp-payroll"></div>
+    <div style="margin-top:12px;display:flex;gap:8px;">
+      <button class="btn primary" style="flex:1;" onclick="openSlipSingle()">🖨 Cetak Slip</button>
+      <button class="btn" style="flex:1;" onclick="editSelectedEmployee()">✎ Edit Data</button>
+    </div>
+    <div style="margin-top:8px;">
+      <button class="btn btn-resign" style="width:100%;" onclick="openResignModal()">🚪 Proses Resign / Settlement</button>
+    </div>
+  </div>
+</div>
+
+<!-- ════════════════════════════ MODAL: TAMBAH/EDIT ════════════════════════════ -->
+<div class="modal-overlay" id="modal-emp" onclick="if(event.target===this)closeModal()">
+  <div class="modal modal-wide" style="width:780px;max-width:96vw;">
+    <div class="modal-hdr">
+      <h3 id="modal-title">Tambah Karyawan Baru</h3>
+      <button class="btn-close" onclick="closeModal()">✕</button>
+    </div>
+    <div class="modal-body" style="padding:16px 20px;">
+
+      <!-- ── BLOK 1: IDENTITAS DASAR ── -->
+      <div class="form-section-title">👤 Identitas Dasar</div>
+      <div class="form-row">
+        <div class="form-group"><label>NIK <span style="color:var(--red)">*</span></label><input type="text" id="f-nik" placeholder="cth: 1234567"></div>
+        <div class="form-group"><label>Nama Lengkap <span style="color:var(--red)">*</span></label><input type="text" id="f-nama" placeholder="cth: Siti Aminah"></div>
+      </div>
+      <div class="form-row">
+        <div class="form-group"><label>No. KTP</label><input type="text" id="f-ktp" placeholder="16 digit NIK KTP"></div>
+        <div class="form-group"><label>NPWP</label><input type="text" id="f-npwp" placeholder="cth: 12.345.678.9-012.000"></div>
+      </div>
+      <div class="form-row">
+        <div class="form-group"><label>Tanggal Lahir</label><input type="date" id="f-tgl-lahir" onchange="updateUsia()"></div>
+        <div class="form-group"><label>Usia (otomatis)</label><input type="text" id="f-usia" readonly placeholder="Otomatis dari tanggal lahir" style="background:var(--surface2);color:var(--text2);"></div>
+      </div>
+      <div class="form-row">
+        <div class="form-group"><label>Status Pernikahan</label>
+          <select id="f-status-nikah">
+            <option value="">— Pilih —</option>
+            <option value="Lajang">Lajang</option>
+            <option value="Menikah">Menikah</option>
+            <option value="Cerai">Cerai</option>
+          </select>
+        </div>
+        <div class="form-group"><label>Jumlah Anak</label><input type="number" id="f-jml-anak" value="0" min="0"></div>
+      </div>
+      <div class="form-row full">
+        <div class="form-group"><label>Alamat Lengkap</label><input type="text" id="f-alamat" placeholder="cth: Jl. Mawar No.5, Kel. Sukamaju, Kec. Cibiru, Bandung"></div>
+      </div>
+
+      <!-- ── BLOK 2: KONTAK ── -->
+      <div class="form-section-title">📱 Kontak</div>
+      <div class="form-row">
+        <div class="form-group"><label>No. HP / WhatsApp</label><input type="text" id="f-hp" placeholder="cth: 08123456789"></div>
+        <div class="form-group"><label>Email</label><input type="email" id="f-email" placeholder="cth: nama@email.com"></div>
+      </div>
+
+      <!-- ── BLOK 3: DATA PEKERJAAN ── -->
+      <div class="form-section-title">💼 Data Pekerjaan</div>
+      <div class="form-row">
+        <div class="form-group"><label>Divisi <span style="color:var(--red)">*</span></label>
+          <select id="f-div">
+            <option value="WS">WS</option>
+            <option value="S. TEMPEL">S. Tempel</option>
+            <option value="S. JARUM 2">S. Jarum 2</option>
+            <option value="S. JARUM 1,2">S. Jarum 1,2</option>
+          </select>
+        </div>
+        <div class="form-group"><label>Jabatan</label>
+          <select id="f-jabatan">
+            <option value="">— Pilih —</option>
+            <option value="Operator">Operator</option>
+            <option value="Helper">Helper</option>
+            <option value="Leader">Leader</option>
+            <option value="QC">QC</option>
+            <option value="Mekanik">Mekanik</option>
+            <option value="Admin">Admin</option>
+          </select>
+        </div>
+      </div>
+      <div class="form-row">
+        <div class="form-group"><label>Status Kontrak</label>
+          <select id="f-kontrak">
+            <option value="">— Pilih —</option>
+            <option value="PKWT">PKWT (Karyawan Kontrak)</option>
+            <option value="PKWTT">PKWTT (Karyawan Tetap)</option>
+          </select>
+        </div>
+        <div class="form-group"><label>Tanggal Berakhir Kontrak</label><input type="date" id="f-tgl-kontrak" placeholder="Kosongkan jika PKWTT"></div>
+      </div>
+      <div class="form-row">
+        <div class="form-group"><label>Tanggal Masuk <span style="color:var(--red)">*</span></label><input type="text" id="f-tgl" placeholder="cth: 30-Apr-24"></div>
+        <div class="form-group"><label>No. Rekening Bank</label><input type="text" id="f-rek"></div>
+      </div>
+      <div class="form-row">
+        <div class="form-group"><label>Status Karyawan</label>
+          <select id="f-status-karyawan" onchange="toggleTglKeluar()">
+            <option value="aktif">Aktif</option>
+            <option value="resign">Resign / Keluar</option>
+          </select>
+        </div>
+        <div class="form-group" id="group-tgl-keluar" style="display:none;">
+          <label>Tanggal Keluar</label>
+          <input type="date" id="f-tgl-keluar" placeholder="Tanggal resign/keluar">
+        </div>
+      </div>
+
+      <!-- ── BLOK 4: BPJS ── -->
+      <div class="form-section-title">🏥 Data BPJS</div>
+      <div class="form-row">
+        <div class="form-group"><label>No. BPJS Kesehatan</label><input type="text" id="f-bpjs-kes" placeholder="cth: 0001234567890"></div>
+        <div class="form-group"><label>No. BPJS Ketenagakerjaan</label><input type="text" id="f-bpjs-ktk" placeholder="cth: 14C00000000000000"></div>
+      </div>
+      <div class="form-row">
+        <div class="form-group" style="grid-column:1/-1;background:#f0f7ff;border:1px solid #c3dafe;border-radius:8px;padding:10px 14px;">
+          <span style="font-size:11px;font-weight:700;color:#3b5fc0;text-transform:uppercase;letter-spacing:0.4px;">ℹ️ Potongan BPJS Otomatis</span><br>
+          <span style="font-size:11px;color:#374151;line-height:1.6;">Dihitung otomatis dari gaji pokok harian: BPJS Kesehatan <strong id="info-bpjs-kes">1%</strong> + BPJS Ketenagakerjaan <strong id="info-bpjs-ktk">3%</strong> (JHT+JP) = <strong id="info-bpjs-total">4%</strong></span>
+        </div>
+      </div>
+
+      <!-- ── BLOK 5: ABSENSI HARIAN ── -->
+      <div class="form-section-title">📅 Absensi Harian</div>
+      <div class="att-grid" id="att-inputs"></div>
+      <div class="form-row" style="margin-top:12px;">
+        <div class="form-group"><label>Total Overtime (jam)</label><input type="number" id="f-ot" value="0"></div>
+        <div class="form-group"><label>Potongan (jam)</label><input type="number" id="f-pot" value="0"></div>
+      </div>
+
+      <!-- ── BLOK 6: BONUS & INSENTIF ── -->
+      <div class="form-section-title">🎯 Bonus &amp; Insentif Produksi</div>
+      <div class="form-row">
+        <div class="form-group">
+          <label>Bonus / Insentif Produksi</label>
+          <div class="rp-input-wrap"><span class="rp-prefix">Rp</span><input type="text" id="f-bonus" class="rp-input" value="0" oninput="formatRpInput(this)" onfocus="rpFocus(this)" onblur="rpBlur(this)" data-raw="0" placeholder="0"></div>
+          <span style="font-size:10.5px;color:var(--text3);display:block;margin-top:3px;">Nilai akan ditambahkan ke total pendapatan slip gaji periode ini</span>
+        </div>
+        <div class="form-group">
+          <label>Keterangan Bonus</label>
+          <input type="text" id="f-bonus-ket" placeholder="cth: Insentif produksi target tercapai" style="width:100%;padding:8px 10px;border:1px solid var(--border2);border-radius:var(--r);font-family:inherit;font-size:12.5px;outline:none;">
+        </div>
+      </div>
+
+    </div>
+    <div class="modal-footer">
+      <button class="btn" onclick="closeModal()">Batal</button>
+      <button class="btn primary" onclick="saveEmployee()">Simpan</button>
+    </div>
+  </div>
+</div>
+
+<!-- ════════════════════════════ MODAL: SETTINGS ════════════════════════════ -->
+<div class="modal-overlay" id="modal-settings" onclick="if(event.target===this)closeSettings()">
+  <div class="modal modal-wide">
+    <div class="modal-hdr">
+      <h3>⚙ Pengaturan Rumus &amp; Konfigurasi</h3>
+      <button class="btn-close" onclick="closeSettings()">✕</button>
+    </div>
+    <div class="modal-body">
+      <div class="alert warning">
+        <span class="ico">⚠</span>
+        <span>Perubahan di sini langsung mempengaruhi seluruh kalkulasi. Ketik angka saja — titik ribuan muncul otomatis.</span>
+      </div>
+
+      <!-- SEKSI 1: KOMPONEN GAJI HARIAN -->
+      <div class="cfg-section-title">💰 Komponen Gaji Harian</div>
+      <div class="cfg-grid">
+        <div class="cfg-card">
+          <label>Gaji Pokok Harian <span class="cfg-hint">Dikalikan jumlah hari hadir</span></label>
+          <div class="rp-input-wrap"><span class="rp-prefix">Rp</span><input type="text" id="cfg-gaji-harian" class="rp-input" value="75.000" placeholder="cth: 75.000" oninput="formatRpInput(this)" onfocus="rpFocus(this)" onblur="rpBlur(this)" data-raw="75000"></div>
+        </div>
+        <div class="cfg-card">
+          <label>Uang Transport <span class="cfg-hint">Per hari hadir</span></label>
+          <div class="rp-input-wrap"><span class="rp-prefix">Rp</span><input type="text" id="cfg-transport" class="rp-input" value="15.000" placeholder="cth: 15.000" oninput="formatRpInput(this)" onfocus="rpFocus(this)" onblur="rpBlur(this)" data-raw="15000"></div>
+        </div>
+        <div class="cfg-card">
+          <label>Uang Makan <span class="cfg-hint">Per hari hadir</span></label>
+          <div class="rp-input-wrap"><span class="rp-prefix">Rp</span><input type="text" id="cfg-makan" class="rp-input" value="20.000" placeholder="cth: 20.000" oninput="formatRpInput(this)" onfocus="rpFocus(this)" onblur="rpBlur(this)" data-raw="20000"></div>
+        </div>
+        <div class="cfg-card">
+          <label>Nilai Premi Hadir <span class="cfg-hint">Dibayar tgl 5 bulan berikutnya</span></label>
+          <div class="rp-input-wrap"><span class="rp-prefix">Rp</span><input type="text" id="cfg-premi-val" class="rp-input" value="100.000" placeholder="cth: 100.000" oninput="formatRpInput(this)" onfocus="rpFocus(this)" onblur="rpBlur(this)" data-raw="100000"></div>
+        </div>
+      </div>
+
+      <!-- SEKSI 2: RATE LEMBUR & POTONGAN -->
+      <div class="cfg-section-title">⏱ Lembur &amp; Potongan</div>
+      <div class="cfg-grid">
+        <div class="cfg-card">
+          <label>Rate Lembur <span class="cfg-hint">Per jam lembur</span></label>
+          <div class="rp-input-wrap"><span class="rp-prefix">Rp</span><input type="text" id="cfg-rate-lembur" class="rp-input" value="12.500" placeholder="cth: 12.500" oninput="formatRpInput(this)" onfocus="rpFocus(this)" onblur="rpBlur(this)" data-raw="12500"></div>
+        </div>
+        <div class="cfg-card">
+          <label>Rate Potongan <span class="cfg-hint">Per jam potongan</span></label>
+          <div class="rp-input-wrap"><span class="rp-prefix">Rp</span><input type="text" id="cfg-rate-potongan" class="rp-input" value="10.000" placeholder="cth: 10.000" oninput="formatRpInput(this)" onfocus="rpFocus(this)" onblur="rpBlur(this)" data-raw="10000"></div>
+        </div>
+      </div>
+
+      <!-- SEKSI BPJS: RATE IURAN BPJS -->
+      <div class="cfg-section-title">🏥 Iuran BPJS (Beban Karyawan)</div>
+      <div class="alert warning" style="margin-bottom:10px;">
+        <span class="ico">ℹ</span>
+        <span>Rate dihitung dari <strong>gaji pokok harian</strong> karyawan. Sesuaikan jika regulasi pemerintah berubah.</span>
+      </div>
+      <div class="cfg-grid">
+        <div class="cfg-card">
+          <label>BPJS Kesehatan <span class="cfg-hint">% dari gaji pokok (default 1%)</span></label>
+          <div style="display:flex;align-items:center;gap:6px;">
+            <input type="number" id="cfg-bpjs-kesehatan" value="1" min="0" max="100" step="0.1" style="width:80px;text-align:right;">
+            <span style="font-size:13px;color:var(--text2);">%</span>
+          </div>
+        </div>
+        <div class="cfg-card">
+          <label>BPJS Ketenagakerjaan <span class="cfg-hint">JHT 2% + JP 1% = 3% (default)</span></label>
+          <div style="display:flex;align-items:center;gap:6px;">
+            <input type="number" id="cfg-bpjs-ketenagakerjaan" value="3" min="0" max="100" step="0.1" style="width:80px;text-align:right;">
+            <span style="font-size:13px;color:var(--text2);">%</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- SEKSI 3: SYARAT PREMI -->
+      <div class="cfg-section-title">🏅 Syarat Premi Kehadiran</div>
+      <div class="cfg-grid cols-3">
+        <div class="cfg-card">
+          <label>Maks Alfa <span class="cfg-hint">Batas hari alfa (biasanya 0)</span></label>
+          <input type="number" id="cfg-max-alfa" value="0" min="0" placeholder="0">
+        </div>
+        <div class="cfg-card">
+          <label>Maks Izin <span class="cfg-hint">Batas hari izin (biasanya 0)</span></label>
+          <input type="number" id="cfg-max-izin" value="0" min="0" placeholder="0">
+        </div>
+        <div class="cfg-card">
+          <label>Maks Sakit <span class="cfg-hint">Batas hari sakit (biasanya 1)</span></label>
+          <input type="number" id="cfg-max-sakit" value="1" min="0" placeholder="1">
+        </div>
+      </div>
+
+      <!-- SEKSI 4: PERIODE DINAMIS -->
+      <div class="cfg-section-title">📅 Periode &amp; Hari Kerja</div>
+      <div class="alert info" style="margin-bottom:10px;">
+        <span class="ico">ℹ</span>
+        <span>Pilih rentang tanggal periode — sistem akan otomatis menghitung hari Minggu (libur) dan jumlah hari kerja efektif. Kolom absensi pada tabel akan menyesuaikan secara otomatis.</span>
+      </div>
+      <div class="cfg-grid">
+        <div class="cfg-card">
+          <label>Tanggal Mulai Periode <span class="cfg-hint">Hari pertama periode absensi</span></label>
+          <input type="date" id="cfg-tgl-mulai" value="2026-04-11">
+        </div>
+        <div class="cfg-card">
+          <label>Tanggal Selesai Periode <span class="cfg-hint">Hari terakhir periode absensi</span></label>
+          <input type="date" id="cfg-tgl-selesai" value="2026-04-25">
+        </div>
+      </div>
+      <div class="cfg-grid" style="margin-top:8px;">
+        <div class="cfg-card">
+          <label>Nama Periode <span class="cfg-hint">Tampil di header &amp; slip gaji (terisi otomatis)</span></label>
+          <input type="text" id="cfg-period" value="11 April – 25 April 2026" placeholder="cth: 1 Mei – 15 Mei 2026">
+        </div>
+        <div class="cfg-card" style="background:#f0fdf4;border:1px solid #b7e0c7;">
+          <label style="color:var(--green);">Total Hari Kerja <span class="cfg-hint" style="color:#5a9e72;">Dihitung otomatis (tidak termasuk Minggu)</span></label>
+          <input type="number" id="cfg-workdays" value="13" min="1" placeholder="13" style="font-weight:700;color:var(--green);" readonly>
+        </div>
+      </div>
+
+      <!-- FORMULA REFERENSI -->
+      <div class="formula-box">
+        <div><span class="fl">TOTAL_HARI</span> = Σ skor harian ÷ 2 &nbsp;<span style="color:#5080a0;">// '√'=hadir penuh (skor 2), Angka=hadir penuh+OT (skor 2)</span></div>
+        <div><span class="fl">TOTAL_TIDAK_MASUK</span> = Alfa + Izin + Sakit &nbsp;<span style="color:#5080a0;">// Cuti Tahunan (C) tidak termasuk — berbayar &amp; tidak membatalkan premi</span></div>
+        <div><span class="fl">TOTAL_HADIR</span> = TOTAL_HARI − TOTAL_TIDAK_MASUK</div>
+        <div><span class="fl">LEMBUR</span> = Σ angka harian (jam OT per hari) + total OT tambahan</div>
+        <div><span class="fl">GAJI_POKOK</span> = TOTAL_HADIR × <span class="fv">GajiHarian</span></div>
+        <div><span class="fl">TOTAL_GAJI</span> = GAJI_POKOK + TRANSPORT + MAKAN + LEMBUR − POTONGAN + PREMI</div>
+      </div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn" onclick="closeSettings()">Batal</button>
+      <button class="btn primary" onclick="applySettings()">✓ Simpan &amp; Hitung Ulang</button>
+    </div>
+  </div>
+</div>
+
+<!-- ════════════════════════════ MODAL: SLIP GAJI v9 ════════════════════════════ -->
+<div class="modal-overlay" id="modal-slip" onclick="if(event.target===this)closeSlip()">
+  <div class="modal modal-slip-v9">
+    <div class="modal-slip-topbar">
+      <div class="modal-slip-topbar-left">
+        <span class="modal-slip-icon">📄</span>
+        <span class="modal-slip-topbar-title">Preview Slip Gaji</span>
+      </div>
+      <div style="display:flex;gap:8px;align-items:center;">
+        <button class="btn primary" style="font-size:12px;padding:6px 14px;" onclick="printSlip()">🖨 Cetak / PDF</button>
+        <button class="btn-close" onclick="closeSlip()">✕</button>
+      </div>
+    </div>
+    <div class="modal-slip-canvas">
+      <div id="slip-content"></div>
+    </div>
+  </div>
+</div>
+
+<!-- ════════════════════════════ SCRIPT ════════════════════════════ -->
+
+<!-- ════════════════════════════ MODAL: IMPORT ════════════════════════════ -->
+<div class="modal-overlay" id="modal-import" onclick="if(event.target===this)closeImportModal()">
+  <div class="modal modal-wide">
+    <div class="modal-hdr">
+      <h3>⬆ Import Data Karyawan (Excel / CSV)</h3>
+      <button class="btn-close" onclick="closeImportModal()">✕</button>
+    </div>
+    <div class="modal-body">
+      <div class="alert info" style="margin-bottom:14px;">
+        <span class="ico">ℹ</span>
+        <span>Upload file Excel (.xlsx/.xls) atau CSV dengan kolom: <b>No, Nama, NIK, Rekening, TglMasuk, Divisi, Tgl11–Tgl25, OT, Potongan</b>. Download template dulu jika belum punya format yang sesuai.</span>
+      </div>
+
+      <!-- Zona upload -->
+      <div id="import-dropzone" style="
+        border:2px dashed var(--border2);border-radius:var(--r-lg);
+        padding:32px 20px;text-align:center;cursor:pointer;
+        transition:border-color .15s,background .15s;
+        background:var(--surface2);
+      " onclick="document.getElementById('import-file-input').click()"
+         ondragover="event.preventDefault();this.style.borderColor='var(--accent)';this.style.background='var(--accent-light)'"
+         ondragleave="this.style.borderColor='';this.style.background='var(--surface2)'"
+         ondrop="handleImportDrop(event)">
+        <div style="font-size:32px;margin-bottom:8px;">📁</div>
+        <div style="font-weight:600;font-size:13px;color:var(--text);">Klik atau drag &amp; drop file di sini</div>
+        <div style="font-size:11.5px;color:var(--text3);margin-top:4px;">Format: .xlsx, .xls, atau .csv · Maks 5 MB</div>
+        <input type="file" id="import-file-input" accept=".xlsx,.xls,.csv" style="display:none" onchange="handleImportFile(this.files[0])">
+      </div>
+
+      <!-- Preview hasil parse -->
+      <div id="import-preview" style="display:none;margin-top:16px;">
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;">
+          <div style="font-size:12px;font-weight:600;color:var(--text2);" id="import-preview-title">Preview Data</div>
+          <div style="font-size:11px;color:var(--text3);" id="import-row-count">—</div>
+        </div>
+        <div style="overflow-x:auto;border:1px solid var(--border);border-radius:var(--r);max-height:240px;overflow-y:auto;">
+          <table style="width:100%;font-size:11px;border-collapse:collapse;background:var(--surface);">
+            <thead id="import-preview-head" style="position:sticky;top:0;background:#1b3060;color:#dde6f7;"></thead>
+            <tbody id="import-preview-body"></tbody>
+          </table>
+        </div>
+        <div id="import-errors" style="display:none;margin-top:10px;"></div>
+        <div style="margin-top:12px;display:flex;gap:8px;align-items:center;">
+          <label style="display:flex;align-items:center;gap:6px;font-size:12px;cursor:pointer;">
+            <input type="radio" name="import-mode" value="replace" checked> Ganti semua data (replace)
+          </label>
+          <label style="display:flex;align-items:center;gap:6px;font-size:12px;cursor:pointer;">
+            <input type="radio" name="import-mode" value="append"> Tambahkan ke data existing (append)
+          </label>
+        </div>
+      </div>
+    </div>
+    <div class="modal-footer" style="justify-content:space-between;">
+      <button class="btn" onclick="downloadImportTemplate()">📥 Download Template Excel</button>
+      <div style="display:flex;gap:8px;">
+        <button class="btn" onclick="closeImportModal()">Batal</button>
+        <button class="btn primary" id="btn-import-apply" disabled onclick="applyImport()">✓ Import Data</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ════════════════════════════ MODAL: THR ════════════════════════════ -->
+<div class="modal-overlay" id="modal-thr" onclick="if(event.target===this)closeTHRModal()">
+  <div class="modal modal-wide" style="width:700px;max-width:96vw;">
+    <div class="modal-hdr">
+      <h3>🎁 Perhitungan THR (Tunjangan Hari Raya)</h3>
+      <button class="btn-close" onclick="closeTHRModal()">✕</button>
+    </div>
+    <div class="modal-body">
+      <div class="alert info" style="margin-bottom:14px;">
+        <span class="ico">ℹ</span>
+        <span>THR dihitung berdasarkan masa kerja: <b>≥ 12 bulan</b> = 1 bulan gaji penuh &nbsp;|&nbsp; <b>&lt; 12 bulan</b> = pro-rata (masa kerja ÷ 12 × gaji bulanan). Gaji bulanan = Gaji Harian × 25 hari kerja.</span>
+      </div>
+      <div style="margin-bottom:12px;display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
+        <div>
+          <label style="font-size:11.5px;font-weight:600;color:var(--text2);margin-right:8px;">Tanggal Referensi THR:</label>
+          <input type="date" id="thr-ref-date" style="padding:6px 10px;border:1px solid var(--border2);border-radius:var(--r);font-family:inherit;font-size:12.5px;outline:none;">
+        </div>
+        <button class="btn primary" onclick="hitungTHR()">🔄 Hitung Ulang</button>
+        <button class="btn" onclick="exportTHRExcel()">⬇ Export Excel</button>
+      </div>
+      <div style="overflow-x:auto;border:1px solid var(--border);border-radius:var(--r);">
+        <table class="pph-table" id="thr-table">
+          <thead><tr>
+            <th>Nama Karyawan</th><th>NIK</th><th>Tgl Masuk</th>
+            <th style="text-align:center;">Masa Kerja</th>
+            <th style="text-align:center;">Status</th>
+            <th style="text-align:right;">Gaji Sebulan</th>
+            <th style="text-align:right;">Nilai THR</th>
+          </tr></thead>
+          <tbody id="thr-tbody"></tbody>
+          <tfoot id="thr-tfoot"></tfoot>
+        </table>
+      </div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn" onclick="closeTHRModal()">Tutup</button>
+    </div>
+  </div>
+</div>
+
+<!-- ════════════════════════════ MODAL: LAPORAN PPh 21 ════════════════════════════ -->
+<div class="modal-overlay" id="modal-pph" onclick="if(event.target===this)closePPh21Modal()">
+  <div class="modal modal-wide" style="width:860px;max-width:96vw;max-height:92vh;">
+    <div class="modal-hdr">
+      <h3>📋 Laporan Tahunan PPh 21 — Formulir 1721-A1</h3>
+      <button class="btn-close" onclick="closePPh21Modal()">✕</button>
+    </div>
+    <div class="modal-body">
+      <div class="alert info" style="margin-bottom:12px;">
+        <span class="ico">ℹ</span>
+        <span>Laporan ini dihasilkan otomatis dari data YTD (Year-to-Date) seluruh histori periode yang tersimpan. PPh 21 dihitung menggunakan tarif progresif berdasarkan PTKP status karyawan.</span>
+      </div>
+      <div style="display:flex;gap:10px;align-items:center;margin-bottom:12px;flex-wrap:wrap;">
+        <label style="font-size:11.5px;font-weight:600;color:var(--text2);">Tahun Pajak:</label>
+        <select id="pph-year" onchange="renderPPh21()" style="padding:6px 10px;border:1px solid var(--border2);border-radius:var(--r);font-family:inherit;font-size:12.5px;">
+          <option value="2026">2026</option><option value="2025">2025</option><option value="2024">2024</option>
+        </select>
+        <button class="btn" onclick="exportPPh21Excel()">⬇ Export Excel</button>
+      </div>
+      <div id="pph-content" style="overflow-x:auto;"></div>
+    </div>
+    <div class="modal-footer"><button class="btn" onclick="closePPh21Modal()">Tutup</button></div>
+  </div>
+</div>
+
+<!-- ════════════════════════════ MODAL: DETAIL 1721-A1 INDIVIDU ════════════════════════════ -->
+<div class="modal-overlay" id="modal-1721" onclick="if(event.target===this)close1721Modal()">
+  <div class="modal" style="width:660px;max-width:96vw;max-height:92vh;">
+    <div class="modal-hdr">
+      <h3>📄 Formulir 1721-A1 — Rincian Per Karyawan</h3>
+      <button class="btn-close" onclick="close1721Modal()">✕</button>
+    </div>
+    <div class="modal-body"><div id="form-1721-content"></div></div>
+    <div class="modal-footer">
+      <button class="btn primary" onclick="cetak1721Individu()">🖨 Cetak</button>
+      <button class="btn" onclick="close1721Modal()">Tutup</button>
+    </div>
+  </div>
+</div>
+
+<!-- ════════════════════════════ PUSAT NOTIFIKASI PANEL ════════════════════════════ -->
+<div id="notif-overlay" onclick="tutupNotifPanel()"></div>
+<div class="notif-panel" id="notif-panel">
+  <!-- Header panel -->
+  <div class="notif-panel-hdr">
+    <div>
+      <div class="notif-panel-title">🔔 Pusat Notifikasi</div>
+      <div class="notif-panel-subtitle" id="notif-panel-subtitle">Memuat peringatan…</div>
+    </div>
+    <div class="notif-hdr-right">
+      <button class="btn-notif-refresh" onclick="jalankanDeteksiNotifikasi()" title="Perbarui notifikasi">↻</button>
+      <button class="btn-notif-close" onclick="tutupNotifPanel()">✕</button>
+    </div>
+  </div>
+  <!-- Filter tab -->
+  <div class="notif-filter-bar" id="notif-filter-bar">
+    <div class="notif-filter-tab active" data-filter="semua" onclick="filterNotif('semua',this)">
+      Semua <span class="notif-tab-count" id="ntc-semua">0</span>
+    </div>
+    <div class="notif-filter-tab" data-filter="kritis" onclick="filterNotif('kritis',this)">
+      🔴 Kritis <span class="notif-tab-count" id="ntc-kritis">0</span>
+    </div>
+    <div class="notif-filter-tab" data-filter="peringatan" onclick="filterNotif('peringatan',this)">
+      🟡 Peringatan <span class="notif-tab-count" id="ntc-peringatan">0</span>
+    </div>
+    <div class="notif-filter-tab" data-filter="info" onclick="filterNotif('info',this)">
+      🔵 Info <span class="notif-tab-count" id="ntc-info">0</span>
+    </div>
+  </div>
+  <!-- Daftar notifikasi -->
+  <div class="notif-list" id="notif-list"></div>
+  <!-- Footer -->
+  <div class="notif-panel-footer">
+    <div class="notif-footer-info" id="notif-footer-info">— peringatan aktif</div>
+    <button class="btn-tandai-semua" onclick="tandaiSemuaSudahBaca()">✓ Tandai semua sudah dibaca</button>
+  </div>
+</div>
+
+
+<!-- ════════════════════════════ MODAL: BULK EDIT HARI ════════════════════════════ -->
+<div class="modal-overlay" id="modal-bulk-edit" onclick="if(event.target===this)closeBulkEditModal()">
+  <div class="modal" style="width:480px;max-width:96vw;">
+    <div class="modal-hdr">
+      <h3>📋 Bulk Edit Hari — Terapkan Status ke Semua Karyawan</h3>
+      <button class="btn-close" onclick="closeBulkEditModal()">✕</button>
+    </div>
+    <div class="modal-body">
+      <div class="alert info" style="margin-bottom:14px;">
+        <span class="ico">ℹ</span>
+        <span>Fitur ini menerapkan satu status absensi ke <b>seluruh karyawan aktif</b> pada tanggal yang dipilih. Gunakan untuk kejadian massal seperti Libur Idul Fitri, cuti bersama, atau hari tanpa operasional.</span>
+      </div>
+      <div class="form-row">
+        <div class="form-group">
+          <label>Pilih Tanggal <span style="color:var(--red)">*</span></label>
+          <select id="bulk-tgl-select" style="width:100%;padding:8px 10px;border:1px solid var(--border2);border-radius:var(--r);font-family:inherit;font-size:12.5px;">
+            <!-- Diisi dinamis oleh JS -->
+          </select>
+        </div>
+        <div class="form-group">
+          <label>Status Absensi <span style="color:var(--red)">*</span></label>
+          <select id="bulk-status-select" style="width:100%;padding:8px 10px;border:1px solid var(--border2);border-radius:var(--r);font-family:inherit;font-size:12.5px;">
+            <option value="L">L — Libur Massal (misal: Hari Raya, Cuti Bersama)</option>
+            <option value="2">2 — Hadir Penuh</option>
+            <option value="1">1 — Setengah Hari</option>
+            <option value="A">A — Alfa (Tanpa Keterangan)</option>
+            <option value="I">I — Izin</option>
+            <option value="S">S — Sakit</option>
+            <option value="C">C — Cuti Tahunan</option>
+            <option value="0">0 — Kosongkan (Hapus Entri)</option>
+          </select>
+        </div>
+      </div>
+      <div class="form-group" style="margin-top:8px;">
+        <label>Keterangan (Opsional)</label>
+        <input type="text" id="bulk-keterangan" placeholder="cth: Libur Idul Fitri 1446 H, Perawatan Mesin Boiler…" style="width:100%;padding:8px 10px;border:1px solid var(--border2);border-radius:var(--r);font-family:inherit;font-size:12.5px;">
+      </div>
+      <div id="bulk-preview-info" style="margin-top:12px;padding:10px 12px;background:var(--accent-light);border:1px solid var(--accent);border-radius:var(--r);font-size:12px;color:var(--accent-dark);display:none;"></div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn" onclick="closeBulkEditModal()">Batal</button>
+      <button class="btn primary" onclick="terapkanBulkEdit()">✓ Terapkan ke Semua Karyawan</button>
+    </div>
+  </div>
+</div>
+
+<!-- ════════════════════════════ MODAL: CATATAN HARI ════════════════════════════ -->
+<div class="modal-overlay" id="modal-catatan-hari" onclick="if(event.target===this)closeCatatanHari()">
+  <div class="modal" style="width:420px;max-width:96vw;">
+    <div class="modal-hdr">
+      <h3 id="modal-catatan-hari-title">📝 Catatan Hari — Tgl <span id="catatan-tgl-label">—</span></h3>
+      <button class="btn-close" onclick="closeCatatanHari()">✕</button>
+    </div>
+    <div class="modal-body">
+      <div style="margin-bottom:10px;font-size:11.5px;color:var(--text2);">Catat kejadian penting pada tanggal ini untuk keperluan arsip operasional pabrik. Catatan akan muncul sebagai keterangan saat mengarahkan kursor ke header tanggal.</div>
+      <textarea id="catatan-hari-input" placeholder="cth: Listrik padam jam 10.00–14.00, produksi terhenti 4 jam.&#10;cth: Mesin Boiler rusak, hanya 60% kapasitas.&#10;cth: Kunjungan audit dari klien PT. XYZ." style="width:100%;height:100px;padding:8px 10px;border:1px solid var(--border2);border-radius:var(--r);font-family:inherit;font-size:12.5px;resize:vertical;outline:none;background:var(--surface);color:var(--text);"></textarea>
+    </div>
+    <div class="modal-footer" style="justify-content:space-between;">
+      <button class="btn" style="color:var(--red);border-color:var(--red);" onclick="hapusCatatanHari()">🗑 Hapus Catatan</button>
+      <div style="display:flex;gap:8px;">
+        <button class="btn" onclick="closeCatatanHari()">Batal</button>
+        <button class="btn primary" onclick="simpanCatatanHari()">✓ Simpan Catatan</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ════════════════════════════ MODAL: IMPOR FINGERPRINT ════════════════════════════ -->
+<div class="modal-overlay" id="modal-import-fingerprint" onclick="if(event.target===this)closeImportFingerprint()">
+  <div class="modal modal-wide" style="width:680px;max-width:96vw;">
+    <div class="modal-hdr">
+      <h3>🖐 Impor dari Mesin Fingerprint / Face Recognition</h3>
+      <button class="btn-close" onclick="closeImportFingerprint()">✕</button>
+    </div>
+    <div class="modal-body">
+      <div class="alert info" style="margin-bottom:14px;">
+        <span class="ico">ℹ</span>
+        <span>Unggah file CSV ekspor dari mesin absensi dengan kolom: <b>NIK, Tanggal, JamMasuk, JamKeluar</b>. Sistem akan otomatis mengonversi ke status absensi berdasarkan jam kerja yang dikonfigurasi.</span>
+      </div>
+      <div class="cfg-grid" style="margin-bottom:14px;">
+        <div class="cfg-card">
+          <label>Jam Masuk Normal <span class="cfg-hint">Batas toleransi hadir penuh</span></label>
+          <input type="time" id="fp-jam-masuk" value="07:00" style="padding:6px 10px;border:1px solid var(--border2);border-radius:var(--r);font-family:inherit;font-size:12.5px;">
+        </div>
+        <div class="cfg-card">
+          <label>Jam Keluar Normal <span class="cfg-hint">Minimal untuk dihitung hadir penuh</span></label>
+          <input type="time" id="fp-jam-keluar" value="16:00" style="padding:6px 10px;border:1px solid var(--border2);border-radius:var(--r);font-family:inherit;font-size:12.5px;">
+        </div>
+        <div class="cfg-card">
+          <label>Batas Setengah Hari <span class="cfg-hint">Durasi minimum (jam) untuk ½ hari</span></label>
+          <input type="number" id="fp-min-setengah" value="4" min="1" max="8" style="padding:6px 10px;border:1px solid var(--border2);border-radius:var(--r);font-family:inherit;font-size:12.5px;width:80px;">
+        </div>
+      </div>
+      <div class="alert warning" style="margin-bottom:10px;font-size:11.5px;">
+        <span class="ico">📌</span>
+        <span><b>Aturan Konversi:</b> Hadir ≥ 8 jam → <code>√</code> (Hadir Penuh) &nbsp;·&nbsp; Hadir ≥ batas ½ hari → <code>√</code> (Hadir Penuh) &nbsp;·&nbsp; Tidak ada tap di hari kerja → <code>A</code> (Alfa)</span>
+      </div>
+      <div id="fp-dropzone" style="border:2px dashed var(--border2);border-radius:var(--r-lg);padding:28px 20px;text-align:center;cursor:pointer;background:var(--surface2);transition:border-color .15s,background .15s;"
+           onclick="document.getElementById('fp-file-input').click()"
+           ondragover="event.preventDefault();this.style.borderColor='var(--accent)'"
+           ondragleave="this.style.borderColor=''"
+           ondrop="handleFPDrop(event)">
+        <div style="font-size:28px;margin-bottom:6px;">🖐</div>
+        <div style="font-weight:600;font-size:13px;color:var(--text);">Klik atau seret file CSV dari mesin absensi</div>
+        <div style="font-size:11px;color:var(--text3);margin-top:4px;">Format: .csv · Kolom: NIK, Tanggal, JamMasuk, JamKeluar</div>
+        <input type="file" id="fp-file-input" accept=".csv" style="display:none" onchange="handleFPFile(this.files[0])">
+      </div>
+      <div id="fp-preview" style="display:none;margin-top:14px;">
+        <div style="font-size:11.5px;font-weight:600;color:var(--text2);margin-bottom:6px;" id="fp-preview-title">Hasil Konversi</div>
+        <div style="overflow-x:auto;border:1px solid var(--border);border-radius:var(--r);max-height:220px;overflow-y:auto;">
+          <table style="width:100%;font-size:11px;border-collapse:collapse;background:var(--surface);">
+            <thead id="fp-preview-head" style="position:sticky;top:0;background:#1b3060;color:#dde6f7;"></thead>
+            <tbody id="fp-preview-body"></tbody>
+          </table>
+        </div>
+        <div id="fp-errors" style="margin-top:8px;"></div>
+      </div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn" onclick="closeImportFingerprint()">Batal</button>
+      <button class="btn primary" id="btn-fp-apply" disabled onclick="terapkanImportFingerprint()">✓ Terapkan Data Fingerprint</button>
+    </div>
+  </div>
+</div>
+
+<!-- ════════════════════════════ MODAL: RESIGN & SETTLEMENT ════════════════════════════ -->
+<div class="modal-overlay" id="modal-resign" onclick="if(event.target===this)closeResignModal()">
+  <div class="modal modal-wide" style="width:660px;max-width:96vw;">
+    <div class="modal-hdr" style="background:linear-gradient(135deg,#7f1d1d,#991b1b);color:#fff;">
+      <h3>🚪 Proses Resign &amp; Final Settlement Karyawan</h3>
+      <button class="btn-close" style="color:#fff;border-color:rgba(255,255,255,0.3);" onclick="closeResignModal()">✕</button>
+    </div>
+    <div class="modal-body">
+      <div class="alert" style="background:#fef2f2;border:1px solid #fca5a5;margin-bottom:14px;">
+        <span class="ico" style="color:var(--red);">⚠</span>
+        <span style="color:#7f1d1d;font-weight:500;">Setelah dikonfirmasi, status karyawan akan diubah menjadi <b>Resign</b>. Data histori tetap tersimpan namun karyawan tidak akan muncul di periode aktif berikutnya.</span>
+      </div>
+
+      <!-- Identitas karyawan -->
+      <div id="resign-identitas" style="margin-bottom:14px;padding:12px;background:var(--surface2);border:1px solid var(--border);border-radius:var(--r);"></div>
+
+      <!-- Tanggal efektif resign -->
+      <div class="form-group" style="margin-bottom:14px;">
+        <label>Tanggal Efektif Resign <span style="color:var(--red)">*</span></label>
+        <input type="date" id="resign-tgl-efektif" style="padding:8px 10px;border:1px solid var(--border2);border-radius:var(--r);font-family:inherit;font-size:12.5px;outline:none;" onchange="hitungSettlement()">
+      </div>
+
+      <!-- Kalkulasi settlement -->
+      <div style="font-size:10.5px;font-weight:700;color:var(--text3);text-transform:uppercase;letter-spacing:.5px;margin-bottom:8px;">Kalkulasi Hak Terakhir (Final Settlement)</div>
+
+      <div class="resign-settlement-grid" id="resign-settlement-grid">
+        <!-- Diisi JS -->
+      </div>
+
+      <!-- Kalkulator pesangon -->
+      <div style="margin-top:14px;padding:12px;background:#fef3e2;border:1px solid #fbbf24;border-radius:var(--r);">
+        <div style="font-size:10.5px;font-weight:700;color:var(--amber);text-transform:uppercase;letter-spacing:.5px;margin-bottom:8px;">Kalkulator Estimasi Pesangon (Pasal 156 UU Ketenagakerjaan)</div>
+        <div id="resign-pesangon-detail" style="font-size:11.5px;line-height:1.8;"></div>
+        <div style="font-size:9.5px;color:var(--text3);margin-top:6px;">* Nilai pesangon merupakan estimasi. Konsultasikan dengan konsultan hukum ketenagakerjaan untuk perhitungan resmi.</div>
+      </div>
+
+      <div class="form-group" style="margin-top:12px;">
+        <label>Alasan Resign / Catatan HR</label>
+        <input type="text" id="resign-alasan" placeholder="cth: Mengundurkan diri atas permintaan sendiri, pindah kota…" style="width:100%;padding:8px 10px;border:1px solid var(--border2);border-radius:var(--r);font-family:inherit;font-size:12.5px;outline:none;">
+      </div>
+    </div>
+    <div class="modal-footer" style="justify-content:space-between;">
+      <button class="btn" onclick="closeResignModal()">Batal</button>
+      <button class="btn" style="background:#991b1b;color:#fff;border-color:#991b1b;" onclick="konfirmasiResign()">🚪 Konfirmasi Resign &amp; Simpan Settlement</button>
+    </div>
+  </div>
+</div>
+
+<!-- Modal Pergantian Periode -->
+<div class="modal-overlay" id="modal-period-change" onclick="if(event.target===this)closePeriodChangeModal()">
+  <div class="modal" style="max-width:420px;">
+    <div class="modal-hdr">
+      <h3>🔄 Ganti Periode</h3>
+      <button class="btn-close" onclick="closePeriodChangeModal()">✕</button>
+    </div>
+    <div class="modal-body">
+      <div class="alert warning" style="margin-bottom:16px;">
+        <span class="ico">⚠️</span>
+        <span>
+          Anda akan mengubah periode absensi.<br>
+          Data absensi dan lembur pada periode lama akan <strong>dihapus</strong> jika Anda melanjutkan.
+        </span>
+      </div>
+
+      <p style="margin-bottom:16px; font-size:13px; color:var(--text2);">
+        Sebaiknya <strong>download backup</strong> terlebih dahulu sebelum mereset data.
+      </p>
+    </div>
+    <div class="modal-footer" style="justify-content:space-between; gap:8px;">
+      <button class="btn" onclick="downloadBackupAndReset()">📥 Download Backup &amp; Reset Data</button>
+      <button class="btn" onclick="closePeriodChangeModal()">Batal</button>
+    </div>
+  </div>
+</div>
+
+<!-- Tooltip Catatan Hari -->
+<div id="catatan-tooltip" class="catatan-tooltip" style="display:none;"></div>
+
+<!-- Toast notifikasi Edit Lock -->
+<div id="edit-lock-toast">
+  <span class="toast-ico">🔒</span>
+  <span id="edit-lock-toast-msg">Aktifkan Mode Edit (🔓) terlebih dahulu untuk mengelola data</span>
+</div>
+
+<script type="module" src="src/main.js"></script>
+</body></html>

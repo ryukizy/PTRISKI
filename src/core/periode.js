@@ -35,11 +35,15 @@ export function generatePeriodDays(startDate = null, endDate = null) {
     const idx  = newDays.length;
     newDays.push(tgl);
     const isSunday = hari === 0;
-    if (isSunday && !cfg.allowSundayWork) {
-      newHolIdx.push(idx);
-    } else {
-      workdays++;
+
+    if (isSunday) {
+      newHolIdx.push(idx);           // Selalu catat indeks hari Minggu
     }
+
+    if (!isSunday || cfg.allowSundayWork) {
+      workdays++;                    // Hitung sebagai hari kerja hanya jika bukan Minggu atau allowSundayWork=true
+    }
+
     cur.setDate(cur.getDate() + 1);
   }
 

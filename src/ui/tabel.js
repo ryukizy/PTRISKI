@@ -179,30 +179,32 @@ function cellHTML(v, dayIdx, empIdx) {
   const showDaily = cfg.columnVisibility.dailyAttendance !== false;
   if (!showDaily) return ''; // jangan render sel hari jika disembunyikan
 
+  const isSundayCol = HOL_IDX.includes(dayIdx);
   const allowSundayEdit = cfg.allowSundayWork === true;
 
-  if (HOL_IDX.includes(dayIdx) && !allowSundayEdit) {
-    // Minggu hanya bisa diedit kalau allowSundayWork = true
+  // === Kasus 1: Kolom Minggu dan tidak boleh diedit ===
+  if (isSundayCol && !allowSundayEdit) {
     return `<td class="cell-sun" style="text-align:center;">${v===0?'—':v}</td>`;
   }
 
-  // Jika Minggu dan allowSundayEdit = true, render sebagai sel biasa (bisa diedit)
-  if (HOL_IDX.includes(dayIdx) && allowSundayEdit) {
+  // === Kasus 2: Kolom Minggu dan boleh diedit ===
+  if (isSundayCol && allowSundayEdit) {
     const d = parseDay(v);
     let display = v === 0 || v === '' || v === null || v === undefined ? '' : v;
-    let cls = '';
+    let cls = 'cell-sun'; // tetap beri tanda visual Minggu
     if (d.type === 'hadir') {
-      if (d.ot > 0) { cls = 'cell-ot'; display = v; }
-      else { cls = 'cell-hadir'; display = ''; }
-    } else if (d.type === 'alfa')  cls = 'cell-alfa';
-    else if (d.type === 'izin')  cls = 'cell-izin';
-    else if (d.type === 'sakit') cls = 'cell-sakit';
-    else if (d.type === 'cuti')  cls = 'cell-cuti';
-    else if (d.type === 'libur') cls = 'cell-libur';
+      if (d.ot > 0) { cls = 'cell-ot cell-sun'; display = v; }
+      else { cls = 'cell-hadir cell-sun'; display = ''; }
+    } else if (d.type === 'alfa')  cls = 'cell-alfa cell-sun';
+    else if (d.type === 'izin')  cls = 'cell-izin cell-sun';
+    else if (d.type === 'sakit') cls = 'cell-sakit cell-sun';
+    else if (d.type === 'cuti')  cls = 'cell-cuti cell-sun';
+    else if (d.type === 'libur') cls = 'cell-libur cell-sun';
 
     return `<td class="${cls}" onclick="inlineEditStart(this, ${empIdx}, ${dayIdx})" style="cursor:pointer;">${display}</td>`;
   }
 
+  // === Kasus normal (bukan Minggu) ===
   const d = parseDay(v);
   let display = v === 0 || v === '' || v === null || v === undefined ? '' : v;
   let cls = '';
